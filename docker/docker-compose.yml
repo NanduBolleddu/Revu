@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    networks:
+      - revu_net
+
+  postgres:
+    image: postgres:15
+    container_name: revu-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: revuuser
+      POSTGRES_PASSWORD: revupass
+      POSTGRES_DB: revudb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - revu_net
+
+  # MongoDB for comments and annotations
+  mongodb:
+    image: mongo:6.0
+    container_name: revu-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: revu
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    networks:
+      - revu_net
+
+  # MongoDB Admin UI
+  mongo-express:
+    image: mongo-express:latest
+    container_name: revu-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: admin123
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+    depends_on:
+      - mongodb
+    networks:
+      - revu_net
+
+volumes:
+  keycloak_data:
+  postgres_data:
+  mongo_data:
+  mongo_config:
+
+networks:
+  revu_net:
+    driver: bridge
