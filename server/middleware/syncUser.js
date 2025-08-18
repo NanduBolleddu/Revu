@@ -21,11 +21,7 @@ async function syncUser(req, res, next) {
     ]);
 
     if (existing.rows.length === 0) {
-      await pool.query(
-        `INSERT INTO users (keycloak_id, username, email, role)
-         VALUES ($1, $2, $3, $4)`,
-        [keycloakId, username, email, role]
-      );
+      console.log('User not found in DB, skipping insert (handled by POST /users)');
     } else {
       await pool.query(
         `UPDATE users

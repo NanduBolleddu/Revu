@@ -67,11 +67,17 @@ router.get('/', async (req, res) => {
 
   try {
     // Only get media uploaded by this specific user
-    const result = await pool.query(
-      'SELECT * FROM media WHERE uploaded_by = $1 ORDER BY created_at DESC',
-      [userId]
-    );
-    res.json(result.rows);
+    // Replace the media query in GET /media with:
+const result = await pool.query(
+  `SELECT m.*, u.username AS uploaded_by_username
+   FROM media m
+   JOIN users u ON m.uploaded_by = u.id
+   WHERE m.uploaded_by = $1
+   ORDER BY m.created_at DESC`,
+  [userId]
+);
+res.json(result.rows);
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error fetching media' });
@@ -119,31 +125,36 @@ router.delete('/:id', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
   const { title } = req.body;
-  
+
+  console.log('PATCH /media/:id called with:', { id, title });
+
   if (!title || !title.trim()) {
+    console.log('Validation failed: Title is required');
     return res.status(400).json({ error: 'Title is required' });
   }
-  
+
   try {
     const result = await pool.query(
       'UPDATE media SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
       [title.trim(), id]
     );
-    
+
     if (result.rows.length === 0) {
+      console.log('No media found with id:', id);
       return res.status(404).json({ error: 'Media file not found' });
     }
-    
+
+    console.log('Media updated successfully:', result.rows[0]);
     res.json({
       message: 'Media updated successfully',
-      media: result.rows[0]
+      media: result.rows
     });
   } catch (err) {
-    console.error('Error updating media:', err);
-    res.status(500).json({ error: 'Error updating media file' });
+    console.error('Error updating media:', err.message);
+    console.error('Full error:', err);
+    res.status(500).json({ error: 'Error updating media file', detail: err.message });
   }
 });
-
 
 
 module.exports = router;

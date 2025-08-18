@@ -22,6 +22,7 @@ const connectMongoDB = async () => {
 };
 
 // Function to initialize collections if they don't exist
+// Function to initialize collections if they don't exist
 const initializeCollections = async () => {
   try {
     const collections = await mongoose.connection.db.listCollections().toArray();
@@ -39,11 +40,18 @@ const initializeCollections = async () => {
       console.log('✅ Annotations collection created');
     }
 
+    // Create mediashares collection if it doesn't exist
+    if (!collectionNames.includes('mediashares')) {
+      await mongoose.connection.db.createCollection('mediashares');
+      console.log('✅ MediaShares collection created');
+    }
+
     console.log('📦 Database initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing collections:', error.message);
   }
 };
+
 
 // Handle graceful shutdown
 process.on('SIGINT', async () => {

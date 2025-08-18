@@ -42,18 +42,24 @@ setSocketInstance(io);
 // Import routes
 const usersRoutes = require('./routes/users');
 const mediaRoutes = require('./routes/media');
-const permissionsRoutes = require('./routes/permissions');
 const commentsRoutes = require('./routes/comments');
 const annotationsRoutes = require('./routes/annotations');
 const privateChatRoutes = require('./routes/privateChat'); // Add private chat routes
+const mediaSharedRoutes = require('./routes/mediaShared');
 
+const organizationsRoutes = require('./routes/organizations');
+const invitationsRoutes = require('./routes/invitations');
+
+
+app.use('/media-shared', mediaSharedRoutes);
 app.use('/users', usersRoutes);
 app.use('/media', mediaRoutes);
-app.use('/permissions', permissionsRoutes);
 app.use('/comments', commentsRoutes);
 app.use('/annotations', annotationsRoutes);
 app.use('/private-chat', privateChatRoutes); // Add private chat routes
 app.use('/uploads', express.static('uploads'));
+app.use('/organizations', organizationsRoutes);
+app.use('/invitations', invitationsRoutes);
 
 // Socket.IO logic
 io.on('connection', (socket) => {
@@ -105,6 +111,8 @@ app.get('/db-test', async (req, res) => {
     res.status(500).send('DB query failed');
   }
 });
+
+
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
