@@ -4,6 +4,21 @@ const pool = require('../config/db');
 const axios = require('axios');
 const { validate: isUuid } = require('uuid');
 
+// Helper function to retry a promise-based action
+const retry = async (fn, retries = 3, delay = 500) => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (retries > 0) {
+      console.log(`Attempt failed, retrying in ${delay}ms... (${retries} retries left)`);
+      await new Promise(res => setTimeout(res, delay));
+      return retry(fn, retries - 1, delay);
+    } else {
+      throw err;
+    }
+  }
+};
+
 // Function to sanitize organization name (remove spaces and special characters)
 const sanitizeOrgName = (name) => name.replace(/\s+/g, '-').toLowerCase();
 
@@ -13,11 +28,12 @@ const generateDomain = (orgName) => `${orgName}.org`; // Example: org-of-demo19.
 const getKeycloakAdminToken = async () => {
   try {
     const response = await axios.post(
-      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/realms/${process.env.KEYCLOAK_REALM || 'revu'}/protocol/openid-connect/token`,
+      `http://localhost:8080/realms/master/protocol/openid-connect/token`,
       new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'revu-admin',
-        client_secret: process.env.KEYCLOAK_ADMIN_CLIENT_SECRET || 'your-client-secret', // Replace with actual secret
+        grant_type: 'password',
+        username: process.env.KEYCLOAK_ADMIN_USER || 'admin',
+        password: process.env.KEYCLOAK_ADMIN_PASSWORD || 'admin',
+        client_id: 'admin-cli',
       }),
       {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -30,34 +46,37 @@ const getKeycloakAdminToken = async () => {
       message: err.message,
       response: err.response?.data,
       status: err.response?.status,
-      clientId: process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'revu-admin',
+      clientId: process.env.KEYCLOAK_ADMIN_USER || 'admin',
       keycloakUrl: process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080',
-      realm: process.env.KEYCLOAK_REALM || 'revu',
     });
     throw new Error(`Failed to obtain Keycloak admin token: ${err.message}`);
   }
 };
 
-// Function to check if user exists in Keycloak
+// Function to check if user exists in Keycloak by their ID
 const checkUserExists = async (accessToken, keycloakId) => {
   try {
-    const response = await axios.get(
-      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/users?username=${keycloakId}`,
+    await axios.get(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/users/${keycloakId}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
         },
       }
     );
-    return response.data.length > 0;
+    // If the request succeeds (status 200), the user exists.
+    return true;
   } catch (err) {
+    // A 404 status specifically means the user does not exist.
+    if (err.response && err.response.status === 404) {
+      return false;
+    }
+    // For other errors, log a warning but assume they don't exist to be safe.
     console.warn('Error checking user existence in Keycloak:', {
       message: err.message,
-      response: err.response?.data,
       status: err.response?.status,
     });
-    return false; // Assume user doesn't exist on error to avoid blocking
+    return false;
   }
 };
 
@@ -165,10 +184,8 @@ router.post('/', async (req, res) => {
           // Add user as OWNER in Keycloak
           await axios.post(
             `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/organizations/${kcOrgId}/members`,
-            {
-              userId: keycloak_id,
-              roles: ['owner'],
-            },
+            
+              keycloak_id,
             {
               headers: {
                 Authorization: `Bearer ${accessToken}`,
@@ -176,7 +193,7 @@ router.post('/', async (req, res) => {
               },
             }
           );
-          console.log('User added as OWNER in Keycloak:', { keycloak_id, orgId: kcOrgId });
+          console.log('User added as member in Keycloak:', { keycloak_id, orgId: kcOrgId });
         }
       } else {
         throw new Error(`Unexpected status code: ${orgResponse.status}`);

@@ -23,8 +23,13 @@ const io = require('socket.io')(server, {
   }
 });
 
+// index.js
+app.set('io', io);
+
+
 app.use(cors());
 app.use(express.json());
+
 
 // Initialize Keycloak
 const keycloak = initKeycloak();
