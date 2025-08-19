@@ -19,11 +19,107 @@ const retry = async (fn, retries = 3, delay = 500) => {
   }
 };
 
+// Function to create a role in the given client
+const createClientRole = async (accessToken, clientUuid, roleName) => {
+  try {
+    const response = await axios.post(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/clients/${clientUuid}/roles`,
+      {
+        name: roleName,
+        description: `${roleName} role`,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    if (response.status === 201 || response.status === 204) {
+      console.log(`✅ Client role '${roleName}' created for client ${clientUuid}`);
+    } else {
+      console.warn(`⚠️ Unexpected status when creating role '${roleName}': ${response.status}`);
+    }
+  } catch (err) {
+    if (err?.response?.status === 409) {
+      // 409 means already exists
+      console.log(`ℹ️ Role '${roleName}' already exists for client ${clientUuid}`);
+    } else {
+      console.error(`❌ Failed to create client role '${roleName}':`, err?.response?.data || err.message);
+    }
+  }
+};
+
+
 // Function to sanitize organization name (remove spaces and special characters)
 const sanitizeOrgName = (name) => name.replace(/\s+/g, '-').toLowerCase();
 
 // Function to generate a unique domain (e.g., based on orgName)
 const generateDomain = (orgName) => `${orgName}.org`; // Example: org-of-demo19.org
+
+// Function to create a client in Keycloak
+const createKeycloakClient = async (accessToken, username) => {
+  try {
+    const clientId = `client-${username}`;
+    const clientSecret = `${username}-secret-${Date.now()}`;
+    
+    const clientPayload = {
+      clientId: clientId,
+      enabled: true,
+      protocol: 'openid-connect',
+      secret: clientSecret,
+      serviceAccountsEnabled: true,
+      standardFlowEnabled: true,
+      implicitFlowEnabled: false,
+      directAccessGrantsEnabled: true,
+      publicClient: false,
+      redirectUris: ['*'],
+      webOrigins: ['*']
+    };
+
+    const response = await axios.post(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/clients`,
+      clientPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (response.status === 201) {
+      let clientUuid = null;
+      if (response.headers.location) {
+        const locationParts = response.headers.location.split('/');
+        clientUuid = locationParts[locationParts.length - 1];
+      }
+
+      console.log('✅ Keycloak client created successfully:', {
+        clientId: clientId,
+        clientUuid: clientUuid,
+        username: username
+      });
+
+      return {
+        clientId: clientId,
+        clientUuid: clientUuid,
+        clientSecret: clientSecret
+      };
+    } else {
+      throw new Error(`Unexpected status code: ${response.status}`);
+    }
+  } catch (err) {
+    console.error('❌ Failed to create Keycloak client:', {
+      message: err.message,
+      response: err.response?.data,
+      status: err.response?.status,
+      username: username
+    });
+    throw err;
+  }
+};
+
 
 const getKeycloakAdminToken = async () => {
   try {
@@ -116,6 +212,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Invalid keycloak_id: Must be a valid UUID' });
   }
 
+  let clientInfo = null;
   let userId;
   let orgIdInDb;
   let kcOrgId = null;
@@ -143,6 +240,24 @@ router.post('/', async (req, res) => {
     // Create organization in Keycloak using Admin REST API
     try {
       const accessToken = await getKeycloakAdminToken();
+      // CREATE CLIENT FOR USER
+      try {
+        clientInfo = await createKeycloakClient(accessToken, username);
+        console.log('✅ Client created for user:', clientInfo);
+
+        // CREATE 3 DEFAULT ROLES FOR CLIENT
+      if (clientInfo && clientInfo.clientUuid) {
+        for (const roleName of ['owner', 'reviewer', 'viewer']) {
+          await createClientRole(accessToken, clientInfo.clientUuid, roleName);
+        }
+      }
+    } catch (clientErr) {
+      console.warn('⚠️ Client creation failed, proceeding without client:', {
+        message: clientErr.message,
+        username: username
+      });
+    }
+
       const orgResponse = await axios.post(
         `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/organizations`,
         {
@@ -232,7 +347,8 @@ router.post('/', async (req, res) => {
       userId,
       organizationId: orgIdInDb,
       keycloakOrgId: kcOrgId || null,
-      message: 'User and organization registered successfully',
+      clientId: clientInfo?.clientId || null,
+      message: 'User, organization, and client registered successfully',
     });
   } catch (err) {
     await pool.query('ROLLBACK');
