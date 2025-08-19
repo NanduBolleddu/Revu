@@ -25,23 +25,18 @@ const io = require('socket.io')(server, {
 
 // index.js
 app.set('io', io);
-
-
 app.use(cors());
 app.use(express.json());
-
-
-// Initialize Keycloak
-const keycloak = initKeycloak();
 app.use(session({
   secret: 'someSecret',
   resave: false,
   saveUninitialized: true,
   store: memoryStore
 }));
-app.use(keycloak.middleware());
 
-// Set socket instance for chat controller
+// Initialize Keycloak
+const keycloak = initKeycloak();
+app.use(keycloak.middleware());
 setSocketInstance(io);
 
 // Import routes
@@ -51,9 +46,8 @@ const commentsRoutes = require('./routes/comments');
 const annotationsRoutes = require('./routes/annotations');
 const privateChatRoutes = require('./routes/privateChat'); // Add private chat routes
 const mediaSharedRoutes = require('./routes/mediaShared');
+const orgInvitesRoutes = require('./routes/orgInvites');
 
-const organizationsRoutes = require('./routes/organizations');
-const invitationsRoutes = require('./routes/invitations');
 
 
 app.use('/media-shared', mediaSharedRoutes);
@@ -63,8 +57,9 @@ app.use('/comments', commentsRoutes);
 app.use('/annotations', annotationsRoutes);
 app.use('/private-chat', privateChatRoutes); // Add private chat routes
 app.use('/uploads', express.static('uploads'));
-app.use('/organizations', organizationsRoutes);
-app.use('/invitations', invitationsRoutes);
+app.use('/org-invites', orgInvitesRoutes);
+
+
 
 // Socket.IO logic
 io.on('connection', (socket) => {

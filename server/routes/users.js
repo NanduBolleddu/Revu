@@ -247,7 +247,7 @@ router.post('/', async (req, res) => {
 
         // CREATE 3 DEFAULT ROLES FOR CLIENT
       if (clientInfo && clientInfo.clientUuid) {
-        for (const roleName of ['owner', 'reviewer', 'viewer']) {
+        for (const roleName of ['owner']) {
           await createClientRole(accessToken, clientInfo.clientUuid, roleName);
         }
       }
@@ -258,20 +258,15 @@ router.post('/', async (req, res) => {
       });
     }
 
-      const orgResponse = await axios.post(
-        `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/organizations`,
-        {
-          name: orgName,
-          domains: [domain],
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
+    const orgResponse = await axios.post(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/organizations`,
+      { name: orgName, domains: [domain] },
+      { headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
         }
-      );
-
+      }
+    );
       console.log('Organization creation response:', {
         status: orgResponse.status,
         data: orgResponse.data,
@@ -325,11 +320,11 @@ router.post('/', async (req, res) => {
 
     // Insert organization in PostgreSQL
     const orgDbRes = await pool.query(
-      `INSERT INTO organizations (name, owner_user_id)
-       VALUES ($1, $2) RETURNING id`,
-      [orgName, userId]
+      `INSERT INTO organizations (name, owner_user_id, keycloak_org_id)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [orgName, userId, kcOrgId]
     );
-    orgIdInDb = orgDbRes.rows[0].id;
+    const orgIdInDb = orgDbRes.rows[0].id;
     console.log('PostgreSQL organization created:', { orgId: orgIdInDb });
 
     // Insert user as owner in organization_users
