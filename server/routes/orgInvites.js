@@ -172,22 +172,24 @@ router.post('/send', async (req, res) => {
     }
 
     // Check if already pending
+    // Check if already pending (allow re-sending if rejected)
     const inviteCheck = await client.query(
-      "SELECT id FROM organization_invites WHERE organization_id = $1 AND invited_user_id = $2 AND status = 'pending'",
+     "SELECT id FROM organization_invites WHERE organization_id = $1 AND invited_user_id = $2 AND status = 'pending'",
       [organization.id, invitedUserInternalId]
     );
+
     if (inviteCheck.rows.length > 0) {
-      await client.query('ROLLBACK'); 
+      await client.query('ROLLBACK');
       client.release();
       return res.status(400).json({ error: 'Invitation already sent to this user' });
     }
 
-    // Create invite
+// Create invite (this will work even if user previously rejected)
     const result = await client.query(
       'INSERT INTO organization_invites (organization_id, invited_user_id, invited_by, message, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
       [organization.id, invitedUserInternalId, inviterInternalId, message?.trim() || null, inviteRole]
     );
-    
+
     await client.query('COMMIT'); 
     client.release();
 

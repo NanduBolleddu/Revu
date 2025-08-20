@@ -47,6 +47,7 @@ const annotationsRoutes = require('./routes/annotations');
 const privateChatRoutes = require('./routes/privateChat'); // Add private chat routes
 const mediaSharedRoutes = require('./routes/mediaShared');
 const orgInvitesRoutes = require('./routes/orgInvites');
+const organizationsRoutes = require('./routes/organizations');
 
 
 
@@ -58,6 +59,7 @@ app.use('/annotations', annotationsRoutes);
 app.use('/private-chat', privateChatRoutes); // Add private chat routes
 app.use('/uploads', express.static('uploads'));
 app.use('/org-invites', orgInvitesRoutes);
+app.use('/organizations', organizationsRoutes);
 
 
 
