@@ -51,6 +51,57 @@ const createClientRole = async (accessToken, clientUuid, roleName) => {
 };
 
 
+// Fetch a specific role from a Keycloak client by role name
+const getClientRoleByName = async (accessToken, clientUuid, roleName) => {
+  try {
+    const response = await axios.get(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/clients/${clientUuid}/roles/${encodeURIComponent(roleName)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    return response.data;
+  } catch (err) {
+    console.error(`❌ Failed to fetch role '${roleName}' for client ${clientUuid}:`, err?.response?.data || err.message);
+    throw err;
+  }
+};
+
+// Assign a client role to a user in Keycloak
+const assignClientRoleToUser = async (accessToken, keycloakUserId, clientUuid, roleRepresentation) => {
+  try {
+    const payload = [
+      {
+        id: roleRepresentation.id,
+        name: roleRepresentation.name,
+        containerId: clientUuid,
+        clientRole: true,
+      },
+    ];
+    const response = await axios.post(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/users/${keycloakUserId}/role-mappings/clients/${clientUuid}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    if (response.status === 204) {
+      console.log(`✅ Assigned role '${roleRepresentation.name}' to user ${keycloakUserId} for client ${clientUuid}`);
+    } else {
+      console.warn(`⚠️ Unexpected status when assigning role '${roleRepresentation.name}': ${response.status}`);
+    }
+  } catch (err) {
+    console.error(`❌ Failed to assign role '${roleRepresentation?.name}' to user ${keycloakUserId}:`, err?.response?.data || err.message);
+    throw err;
+  }
+};
+
+
 // Function to sanitize organization name (remove spaces and special characters)
 const sanitizeOrgName = (name) => name.replace(/\s+/g, '-').toLowerCase();
 
@@ -247,8 +298,20 @@ router.post('/', async (req, res) => {
 
         // CREATE 3 DEFAULT ROLES FOR CLIENT
       if (clientInfo && clientInfo.clientUuid) {
-        for (const roleName of ['owner']) {
+        for (const roleName of ['owner','reviewer','viewer']) {
           await createClientRole(accessToken, clientInfo.clientUuid, roleName);
+        }
+        // Map 'owner' role to the registering user
+        try {
+          const userExistsForRole = await checkUserExists(accessToken, keycloak_id);
+          if (!userExistsForRole) {
+            console.warn('User does not exist in Keycloak, skipping role mapping:', { keycloak_id });
+          } else {
+            const ownerRole = await retry(() => getClientRoleByName(accessToken, clientInfo.clientUuid, 'owner'), 5, 500);
+            await assignClientRoleToUser(accessToken, keycloak_id, clientInfo.clientUuid, ownerRole);
+          }
+        } catch (roleMapErr) {
+          console.warn('⚠️ Failed to map owner role to user:', roleMapErr?.message || roleMapErr);
         }
       }
     } catch (clientErr) {

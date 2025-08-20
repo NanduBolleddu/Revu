@@ -24,6 +24,86 @@ const getKeycloakAdminToken = async () => {
   }
 };
 
+// Helper: find Keycloak client by clientId (returns object with id (UUID))
+const getKeycloakClientByClientId = async (accessToken, clientId) => {
+  try {
+    const response = await axios.get(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/clients`,
+      {
+        params: { clientId },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+    const clients = Array.isArray(response.data) ? response.data : [];
+    if (!clients.length) {
+      throw new Error(`Client not found for clientId=${clientId}`);
+    }
+    return clients[0];
+  } catch (err) {
+    console.error('❌ Failed to fetch Keycloak client by clientId:', {
+      clientId,
+      message: err.message,
+      response: err.response?.data,
+      status: err.response?.status,
+    });
+    throw err;
+  }
+};
+
+// Helper: fetch a specific role from a client by name
+const getClientRoleByName = async (accessToken, clientUuid, roleName) => {
+  try {
+    const response = await axios.get(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/clients/${clientUuid}/roles/${encodeURIComponent(roleName)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    return response.data;
+  } catch (err) {
+    console.error(`❌ Failed to get role '${roleName}' for client ${clientUuid}:`, err?.response?.data || err.message);
+    throw err;
+  }
+};
+
+// Helper: assign a client role to a user
+const assignClientRoleToUser = async (accessToken, keycloakUserId, clientUuid, roleRepresentation) => {
+  try {
+    const payload = [
+      {
+        id: roleRepresentation.id,
+        name: roleRepresentation.name,
+        containerId: clientUuid,
+        clientRole: true,
+      },
+    ];
+    const response = await axios.post(
+      `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/users/${keycloakUserId}/role-mappings/clients/${clientUuid}`,
+      payload,
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+    );
+    if (response.status === 204) {
+      console.log(`✅ Assigned role '${roleRepresentation.name}' to user ${keycloakUserId} for client ${clientUuid}`);
+    } else {
+      console.warn(`⚠️ Unexpected status when assigning role '${roleRepresentation.name}': ${response.status}`);
+    }
+  } catch (err) {
+    console.error(`❌ Failed to assign role '${roleRepresentation?.name}' to user ${keycloakUserId}:`, err?.response?.data || err.message);
+    throw err;
+  }
+};
+
+// DB Helper: ensure organization_invites.role column exists
+const ensureOrganizationInvitesRoleColumn = async (client) => {
+  const checkQuery = `
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'organization_invites' AND column_name = 'role'
+  `;
+  const result = await client.query(checkQuery);
+  if (result.rows.length === 0) {
+    console.log("ℹ️ Adding missing column organization_invites.role (text)");
+    await client.query("ALTER TABLE organization_invites ADD COLUMN role TEXT");
+  }
+};
+
 // Test route
 router.get('/test', (req, res) => {
   res.json({ message: 'Org invites route is working!' });
@@ -31,14 +111,21 @@ router.get('/test', (req, res) => {
 
 // POST /send - Send organization invite
 router.post('/send', async (req, res) => {
-  const { invited_user_id, invited_by, message } = req.body;
+  const { invited_user_id, invited_by, message, role } = req.body;
   if (!invited_user_id || !invited_by) {
     return res.status(400).json({ error: 'invited_user_id and invited_by are required' });
+  }
+  const allowedRoles = ['reviewer', 'viewer'];
+  const inviteRole = (role || 'viewer').toLowerCase();
+  if (!allowedRoles.includes(inviteRole)) {
+    return res.status(400).json({ error: `Invalid role. Allowed: ${allowedRoles.join(', ')}` });
   }
   
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Ensure DB column exists for storing invite role
+    await ensureOrganizationInvitesRoleColumn(client);
     
     // Lookup inviter
     const inviterUserResult = await client.query('SELECT id FROM users WHERE keycloak_id = $1', [invited_by]);
@@ -97,8 +184,8 @@ router.post('/send', async (req, res) => {
 
     // Create invite
     const result = await client.query(
-      'INSERT INTO organization_invites (organization_id, invited_user_id, invited_by, message) VALUES ($1, $2, $3, $4) RETURNING *',
-      [organization.id, invitedUserInternalId, inviterInternalId, message?.trim() || null]
+      'INSERT INTO organization_invites (organization_id, invited_user_id, invited_by, message, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [organization.id, invitedUserInternalId, inviterInternalId, message?.trim() || null, inviteRole]
     );
     
     await client.query('COMMIT'); 
@@ -166,9 +253,10 @@ router.post('/accept/:inviteId', async (req, res) => {
     
     // Get invitation details with organization and Keycloak org ID
     const inviteResult = await client.query(`
-      SELECT oi.*, o.name as organization_name, o.keycloak_org_id
+      SELECT oi.*, o.name as organization_name, o.keycloak_org_id, u_owner.username as owner_username
       FROM organization_invites oi
       INNER JOIN organizations o ON oi.organization_id = o.id
+      INNER JOIN users u_owner ON o.owner_user_id = u_owner.id
       WHERE oi.id = $1 AND oi.status = 'pending'
     `, [inviteId]);
     
@@ -190,12 +278,12 @@ router.post('/accept/:inviteId', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     const invitedUserKeycloakId = userResult.rows[0].keycloak_id;
-    const invitedUserUsername = userResult.rows.username;
+    const invitedUserUsername = userResult.rows[0].username;
 
-    // Add user to organization in local database
+    // Add user to organization in local database with invited role
     await client.query(
       'INSERT INTO organization_users (organization_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4)',
-      [invite.organization_id, invite.invited_user_id, 'viewer', invite.invited_by]
+      [invite.organization_id, invite.invited_user_id, invite.role || 'viewer', invite.invited_by]
     );
 
     // Update invite status
@@ -207,15 +295,15 @@ router.post('/accept/:inviteId', async (req, res) => {
     await client.query('COMMIT'); 
     client.release();
 
-    // Add user to Keycloak organization using invite-existing-user API
+    // Add user to Keycloak organization using invite-existing-user API (email invite)
     if (invite.keycloak_org_id && invitedUserKeycloakId) {
       try {
         const accessToken = await getKeycloakAdminToken();
-        
+
         // Use form data for the invite-existing-user endpoint
         const formData = new URLSearchParams();
         formData.append('id', invitedUserKeycloakId);
-        
+
         await axios.post(
           `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/organizations/${invite.keycloak_org_id}/members/invite-existing-user`,
           formData,
@@ -226,22 +314,66 @@ router.post('/accept/:inviteId', async (req, res) => {
             }
           }
         );
-        
-        console.log('✅ User added to Keycloak organization via invite-existing-user:', {
+
+        console.log('✅ User invited via Keycloak invite-existing-user:', {
           keycloakId: invitedUserKeycloakId,
           username: invitedUserUsername,
           orgId: invite.keycloak_org_id
         });
-        
       } catch (kcErr) {
-        console.warn('⚠️ Failed to add user to Keycloak organization:', {
-          error: kcErr.message,
+        const errorMessage = kcErr?.response?.data?.errorMessage || kcErr.message;
+        const statusCode = kcErr?.response?.status;
+        console.warn('⚠️ invite-existing-user failed:', {
+          status: statusCode,
+          errorMessage: errorMessage,
           response: kcErr.response?.data,
-          status: kcErr.response?.status,
-          keycloakId: invitedUserKeycloakId
         });
+        // If invite fails due to email sending issues, fall back to direct membership (no email)
+        if (statusCode === 500 && errorMessage && errorMessage.toLowerCase().includes('invite email')) {
+          try {
+            const accessToken = await getKeycloakAdminToken();
+            await axios.post(
+              `${process.env.KEYCLOAK_SERVER_URL || 'http://localhost:8080'}/admin/realms/${process.env.KEYCLOAK_REALM || 'revu'}/organizations/${invite.keycloak_org_id}/members`,
+              invitedUserKeycloakId,
+              {
+                headers: {
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json'
+                }
+              }
+            );
+            console.log('✅ Fallback: User added to Keycloak organization (direct membership, no email):', {
+              keycloakId: invitedUserKeycloakId,
+              username: invitedUserUsername,
+              orgId: invite.keycloak_org_id
+            });
+          } catch (fallbackErr) {
+            console.warn('⚠️ Fallback direct membership also failed:', {
+              error: fallbackErr.message,
+              response: fallbackErr.response?.data,
+              status: fallbackErr.response?.status,
+            });
+          }
+        }
         // Don't fail the entire operation if Keycloak fails
       }
+    }
+
+    // Map client role (reviewer/viewer) of inviter's client to invited user
+    try {
+      const accessToken = await getKeycloakAdminToken();
+      const inviterClientId = `client-${invite.owner_username}`;
+      const clientObj = await getKeycloakClientByClientId(accessToken, inviterClientId);
+      if (clientObj && clientObj.id) {
+        const roleName = invite.role || 'viewer';
+        const roleRep = await getClientRoleByName(accessToken, clientObj.id, roleName);
+        await assignClientRoleToUser(accessToken, invitedUserKeycloakId, clientObj.id, roleRep);
+        console.log('✅ Assigned client role to invited user:', { user: invitedUserUsername, role: roleName, clientId: inviterClientId });
+      } else {
+        console.warn('⚠️ Inviter client not found for role mapping:', { inviterClientId });
+      }
+    } catch (mapErr) {
+      console.warn('⚠️ Failed to map client role to invited user:', mapErr?.message || mapErr);
     }
     
     console.log('✅ Invitation accepted:', inviteId);
