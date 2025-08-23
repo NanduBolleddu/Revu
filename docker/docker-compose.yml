@@ -8,10 +8,19 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      #KC_FEATURES: preview,organization
+
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: revudb
+      KC_DB_USERNAME: revuuser
+      KC_DB_PASSWORD: revupass
+
     ports:
       - "8080:8080"
     volumes:
       - keycloak_data:/opt/keycloak/data
+      - ./keycloak-setup/themes:/opt/keycloak/themes
     networks:
       - revu_net
 
